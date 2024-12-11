@@ -119,6 +119,20 @@ async function commandExists(cmd: string): Promise<boolean> {
   }
 }
 
+async function getImageDimensions(
+  imagePath: string
+): Promise<{ width: number; height: number; size: number }> {
+  const { stdout } = await execAsync(
+    `identify -format "%w %h %b" ${imagePath}`
+  );
+  const [width, height, size] = stdout.trim().split(" ");
+  return {
+    width: Number.parseInt(width, 10),
+    height: Number.parseInt(height, 10),
+    size: Number.parseInt(size, 10),
+  };
+}
+
 async function addImagesToClipboard(
   images: (Image & { data: Buffer })[]
 ): Promise<void> {
@@ -126,6 +140,8 @@ async function addImagesToClipboard(
 
   const hasPbcopy = await commandExists("pbcopy");
   const hasOsascript = await commandExists("osascript");
+  const hasConvert = await commandExists("convert");
+  const hasIdentify = await commandExists("identify");
   if (!hasPbcopy) {
     throw new Error(
       "'pbcopy' command not found. This tool works on macOS only by default."
@@ -136,29 +152,54 @@ async function addImagesToClipboard(
       "'osascript' command not found. Required to set clipboard with images."
     );
   }
+  if (!hasConvert || !hasIdentify) {
+    throw new Error(
+      "'convert' or 'identify' command not found. Please install ImageMagick."
+    );
+  }
+
+  const MAX_HEIGHT = 8000;
+  const MAX_SIZE_BYTES = 30 * 1024 * 1024; // 30MB
+  const MAX_IMAGES_PER_GROUP = 6; // 1グループあたりの最大画像数
 
   const tempDir = "/tmp/mcp-fetch-images";
   await execAsync(`mkdir -p ${tempDir} && rm -f ${tempDir}/*.png`);
 
+  // 全画像を一旦保存
+  const imagePaths: string[] = [];
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
     const imgPath = `${tempDir}/img_${i}.png`;
     await execAsync(
       `echo '${img.data.toString("base64")}' | base64 --decode > ${imgPath}`
     );
-    const script = `osascript -e 'set the clipboard to (read (POSIX file "${imgPath}") as «class PNGf»)'`;
-    const { stderr } = await execAsync(script);
+    imagePaths.push(imgPath);
+  }
+
+  // 画像をグループ化して処理
+  let currentGroup: string[] = [];
+  let currentHeight = 0;
+  let currentSize = 0;
+
+  const processGroup = async (group: string[]) => {
+    if (group.length === 0) return;
+
+    const mergedImagePath = `${tempDir}/merged_${Date.now()}.png`;
+    await execAsync(`convert -append ${group.join(" ")} ${mergedImagePath}`);
+
+    const { stderr } = await execAsync(
+      `osascript -e 'set the clipboard to (read (POSIX file "${mergedImagePath}") as «class PNGf»)'`
+    );
     if (stderr?.trim()) {
       const lines = stderr.trim().split("\n");
       const nonWarningLines = lines.filter(
         (line) => !line.includes("WARNING:")
       );
       if (nonWarningLines.length > 0) {
-        throw new Error("Failed to copy image to clipboard.");
+        throw new Error("Failed to copy merged image to clipboard.");
       }
     }
 
-    // 各画像コピー後に⌘Vを実行
     await sleep(500);
     const pasteScript = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
     const { stderr: pasteStderr } = await execAsync(pasteScript);
@@ -168,11 +209,35 @@ async function addImagesToClipboard(
         (line) => !line.includes("WARNING:")
       );
       if (nonWarningLines.length > 0) {
-        console.warn("Failed to paste image.");
+        console.warn("Failed to paste merged image.");
       }
     }
     await sleep(500);
+  };
+
+  for (const imgPath of imagePaths) {
+    const { height, size } = await getImageDimensions(imgPath);
+
+    if (
+      currentGroup.length >= MAX_IMAGES_PER_GROUP ||
+      currentHeight + height > MAX_HEIGHT ||
+      currentSize + size > MAX_SIZE_BYTES
+    ) {
+      // 現在のグループを処理
+      await processGroup(currentGroup);
+      // 新しいグループを開始
+      currentGroup = [imgPath];
+      currentHeight = height;
+      currentSize = size;
+    } else {
+      currentGroup.push(imgPath);
+      currentHeight += height;
+      currentSize += size;
+    }
   }
+
+  // 残りのグループを処理
+  await processGroup(currentGroup);
 
   await execAsync(`rm -rf ${tempDir}`);
 }
@@ -248,7 +313,7 @@ async function fetchUrl(
         await addImagesToClipboard(fetchedImages);
         return {
           content: markdown,
-          prefix: `Found and processed ${fetchedImages.length} images. Each has been copied to your clipboard with a short delay. If images were found, please paste them (Cmd+V) now and combine them with the retrieved content.\n`,
+          prefix: `Found and processed ${fetchedImages.length} images. Images have been merged vertically (max 6 images per group) and copied to your clipboard. Please paste (Cmd+V) to combine with the retrieved content.\n`,
           imageUrls,
         };
       } catch (err) {
@@ -296,7 +361,7 @@ server.setRequestHandler(
       {
         name: "fetch",
         description:
-          "Retrieves URLs from the Internet and extracts their content as markdown. If an image is found, it is written to the clipboard of the user's host machine, so once you stop the response and ask the user to “paste the image in the article.",
+          "Retrieves URLs from the Internet and extracts their content as markdown. If images are found, they are merged vertically (max 6 images per group, max height 8000px, max size 30MB per group) and copied to the clipboard of the user's host machine. You will need to paste (Cmd+V) to insert the images.",
         inputSchema: zodToJsonSchema(FetchArgsSchema),
       },
     ];
