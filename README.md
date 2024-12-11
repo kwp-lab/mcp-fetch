@@ -2,6 +2,32 @@
 
 Model Context Protocol server for fetching web content and processing images. This allows Claude Desktop (or any MCP client) to fetch web content and handle images appropriately.
 
+## Quick Start (For Users)
+
+To use this tool with Claude Desktop, simply add the following to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "tools": {
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@kazuph/mcp-fetch"]
+    }
+  }
+}
+```
+
+This will automatically download and run the latest version of the tool when needed.
+
+**Note**: You'll need macOS and ImageMagick installed for image processing:
+```bash
+brew install imagemagick
+```
+
+## For Developers
+
+The following sections are for those who want to develop or modify the tool.
+
 ## Prerequisites
 
 - Node.js 18+
