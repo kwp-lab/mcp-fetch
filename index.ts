@@ -15,6 +15,7 @@ import TurndownService from "turndown";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import robotsParser from "robots-parser";
+import sharp from "sharp";
 
 const execAsync = promisify(exec);
 
@@ -102,9 +103,31 @@ async function fetchImages(
       );
     }
     const buffer = await response.arrayBuffer();
+    const imageBuffer = Buffer.from(buffer);
+
+    // Check if the image is a GIF and extract first frame if animated
+    if (img.src.toLowerCase().endsWith(".gif")) {
+      try {
+        const metadata = await sharp(imageBuffer).metadata();
+        if (metadata.pages && metadata.pages > 1) {
+          // Extract first frame of animated GIF
+          const firstFrame = await sharp(imageBuffer, { page: 0 })
+            .png()
+            .toBuffer();
+          fetchedImages.push({
+            ...img,
+            data: firstFrame,
+          });
+          continue;
+        }
+      } catch (error) {
+        console.warn(`Warning: Failed to process GIF image ${img.src}:`, error);
+      }
+    }
+
     fetchedImages.push({
       ...img,
-      data: Buffer.from(buffer),
+      data: imageBuffer,
     });
   }
   return fetchedImages;
@@ -120,16 +143,13 @@ async function commandExists(cmd: string): Promise<boolean> {
 }
 
 async function getImageDimensions(
-  imagePath: string
+  buffer: Buffer
 ): Promise<{ width: number; height: number; size: number }> {
-  const { stdout } = await execAsync(
-    `identify -format "%w %h %b" ${imagePath}`
-  );
-  const [width, height, size] = stdout.trim().split(" ");
+  const metadata = await sharp(buffer).metadata();
   return {
-    width: Number.parseInt(width, 10),
-    height: Number.parseInt(height, 10),
-    size: Number.parseInt(size, 10),
+    width: metadata.width || 0,
+    height: metadata.height || 0,
+    size: buffer.length,
   };
 }
 
@@ -140,8 +160,6 @@ async function addImagesToClipboard(
 
   const hasPbcopy = await commandExists("pbcopy");
   const hasOsascript = await commandExists("osascript");
-  const hasConvert = await commandExists("convert");
-  const hasIdentify = await commandExists("identify");
   if (!hasPbcopy) {
     throw new Error(
       "'pbcopy' command not found. This tool works on macOS only by default."
@@ -152,11 +170,6 @@ async function addImagesToClipboard(
       "'osascript' command not found. Required to set clipboard with images."
     );
   }
-  if (!hasConvert || !hasIdentify) {
-    throw new Error(
-      "'convert' or 'identify' command not found. Please install ImageMagick."
-    );
-  }
 
   const MAX_HEIGHT = 8000;
   const MAX_SIZE_BYTES = 30 * 1024 * 1024; // 30MB
@@ -165,27 +178,58 @@ async function addImagesToClipboard(
   const tempDir = "/tmp/mcp-fetch-images";
   await execAsync(`mkdir -p ${tempDir} && rm -f ${tempDir}/*.png`);
 
-  // 全画像を一旦保存
-  const imagePaths: string[] = [];
-  for (let i = 0; i < images.length; i++) {
-    const img = images[i];
-    const imgPath = `${tempDir}/img_${i}.png`;
-    await execAsync(
-      `echo '${img.data.toString("base64")}' | base64 --decode > ${imgPath}`
-    );
-    imagePaths.push(imgPath);
-  }
-
   // 画像をグループ化して処理
-  let currentGroup: string[] = [];
+  let currentGroup: Buffer[] = [];
   let currentHeight = 0;
   let currentSize = 0;
 
-  const processGroup = async (group: string[]) => {
+  const processGroup = async (group: Buffer[]) => {
     if (group.length === 0) return;
 
+    // 垂直方向に画像を結合
     const mergedImagePath = `${tempDir}/merged_${Date.now()}.png`;
-    await execAsync(`convert -append ${group.join(" ")} ${mergedImagePath}`);
+    await sharp({
+      create: {
+        width: Math.max(
+          ...(await Promise.all(
+            group.map(async (buffer) => {
+              const metadata = await sharp(buffer).metadata();
+              return metadata.width || 0;
+            })
+          ))
+        ),
+        height: (
+          await Promise.all(
+            group.map(async (buffer) => {
+              const metadata = await sharp(buffer).metadata();
+              return metadata.height || 0;
+            })
+          )
+        ).reduce((a, b) => a + b, 0),
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      },
+    })
+      .composite(
+        await Promise.all(
+          group.map(async (buffer, index) => {
+            const previousHeights = await Promise.all(
+              group.slice(0, index).map(async (b) => {
+                const metadata = await sharp(b).metadata();
+                return metadata.height || 0;
+              })
+            );
+            const top = previousHeights.reduce((a, b) => a + b, 0);
+            return {
+              input: buffer,
+              top,
+              left: 0,
+            };
+          })
+        )
+      )
+      .png()
+      .toFile(mergedImagePath);
 
     const { stderr } = await execAsync(
       `osascript -e 'set the clipboard to (read (POSIX file "${mergedImagePath}") as «class PNGf»)'`
@@ -215,8 +259,8 @@ async function addImagesToClipboard(
     await sleep(500);
   };
 
-  for (const imgPath of imagePaths) {
-    const { height, size } = await getImageDimensions(imgPath);
+  for (const img of images) {
+    const { height, size } = await getImageDimensions(img.data);
 
     if (
       currentGroup.length >= MAX_IMAGES_PER_GROUP ||
@@ -226,11 +270,11 @@ async function addImagesToClipboard(
       // 現在のグループを処理
       await processGroup(currentGroup);
       // 新しいグループを開始
-      currentGroup = [imgPath];
+      currentGroup = [img.data];
       currentHeight = height;
       currentSize = size;
     } else {
-      currentGroup.push(imgPath);
+      currentGroup.push(img.data);
       currentHeight += height;
       currentSize += size;
     }

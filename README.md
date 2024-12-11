@@ -21,12 +21,7 @@ This will automatically download and run the latest version of the tool when nee
 
 ### Required Setup
 
-1. Install ImageMagick for image processing:
-```bash
-brew install imagemagick
-```
-
-2. Enable Accessibility for Claude:
+1. Enable Accessibility for Claude:
    - Open System Settings
    - Go to Privacy & Security > Accessibility
    - Click the "+" button
@@ -43,7 +38,6 @@ The following sections are for those who want to develop or modify the tool.
 
 - Node.js 18+
 - macOS (for clipboard operations)
-- ImageMagick (for image processing)
 - Claude Desktop (install from https://claude.ai/desktop)
 - tsx (install via `npm install -g tsx`)
 
@@ -70,19 +64,14 @@ If content exceeds these limits, images will be automatically split into multipl
 
 1. Make sure Claude Desktop is installed and running.
 
-2. Install ImageMagick if you haven't:
-```bash
-brew install imagemagick
-```
-
-3. Install tsx globally if you haven't:
+2. Install tsx globally if you haven't:
 ```bash
 npm install -g tsx
 # or
 pnpm add -g tsx
 ```
 
-4. Modify your Claude Desktop config located at:
+3. Modify your Claude Desktop config located at:
 `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 You can easily find this through the Claude Desktop menu:
@@ -110,5 +99,6 @@ Add the following to your MCP client's configuration:
 ## Notes
 
 - This tool is designed for macOS only due to its dependency on macOS-specific clipboard operations.
-- Images are processed using ImageMagick to ensure optimal size and layout.
+- Images are processed using Sharp for optimal performance and quality.
 - When multiple images are found, they are merged vertically with consideration for size limits.
+- Animated GIFs are automatically handled by extracting their first frame.
