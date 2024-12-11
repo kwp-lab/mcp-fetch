@@ -17,7 +17,6 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.0.0",
 		"@mozilla/readability": "^0.5.0",
-		"applescript": "^1.0.0",
 		"jsdom": "^24.0.0",
 		"node-fetch": "^3.3.2",
 		"robots-parser": "^3.0.1",

@@ -12,8 +12,11 @@ import fetch from "node-fetch";
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
-import * as applescript from "applescript";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import robotsParser from "robots-parser";
+
+const execAsync = promisify(exec);
 
 interface Image {
   src: string;
@@ -93,10 +96,10 @@ async function fetchImages(
       try {
         const response = await fetch(img.src);
         if (response.ok) {
-          const buffer = await response.buffer();
+          const buffer = await response.arrayBuffer();
           return {
             ...img,
-            data: buffer,
+            data: Buffer.from(buffer),
           };
         }
       } catch (error) {
@@ -110,27 +113,46 @@ async function fetchImages(
   );
 }
 
+// Check if a command exists in PATH
+async function commandExists(cmd: string): Promise<boolean> {
+  try {
+    await execAsync(`which ${cmd}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function addImagesToClipboard(
   images: (Image & { data: Buffer })[]
 ): Promise<unknown> {
   if (images.length === 0) return;
 
+  // 一時ファイルのパスを生成
+  const tempDir = "/tmp/mcp-fetch-images";
+  const decodeCommands = images
+    .map(
+      (img, index) =>
+        `echo '${img.data.toString("base64")}' | base64 --decode > ${tempDir}/${index}.png`
+    )
+    .join(" && ");
+
   const script = `
-    tell application "System Events"
-      set imageData to {${images
-        .map((img) => `«data ${img.data.toString("base64")}»`)
-        .join(", ")}}
-      set the clipboard to imageData
-    end tell
+    mkdir -p ${tempDir}
+    rm -f ${tempDir}/*.png
+    ${decodeCommands}
+    magick convert -append ${tempDir}/*.png ${tempDir}/combined.png
+    osascript -e 'set the clipboard to (read (POSIX file "${tempDir}/combined.png") as «class PNGf»)'
+    rm -rf ${tempDir}
   `;
 
   return new Promise((resolve, reject) => {
-    applescript.execString(script, (err: Error | null, result: unknown) => {
+    exec(script, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
-        console.error("AppleScript error:", err);
+        console.error("Shell error:", err);
         reject(err);
       } else {
-        resolve(result);
+        resolve(stdout);
       }
     });
   });
@@ -210,14 +232,23 @@ async function fetchUrl(
       const { markdown, images } = result;
       const fetchedImages = await fetchImages(images);
       if (fetchedImages.length > 0) {
-        await addImagesToClipboard(fetchedImages);
+        try {
+          await addImagesToClipboard(fetchedImages);
+          return {
+            content: markdown,
+            prefix: `Found and processed ${fetchedImages.length} images. They have been added to your clipboard.\n`,
+          };
+        } catch (err) {
+          console.error("Failed to add images to clipboard:", err);
+          return {
+            content: markdown,
+            prefix: `Found ${fetchedImages.length} images but failed to copy them to the clipboard.\n`,
+          };
+        }
       }
       return {
         content: markdown,
-        prefix:
-          fetchedImages.length > 0
-            ? `Found and processed ${fetchedImages.length} images. They have been added to your clipboard.\n`
-            : "",
+        prefix: "",
       };
     }
 
@@ -296,8 +327,8 @@ server.setRequestHandler(
       );
 
       let finalContent = content;
-      if (content.length > parsed.data.maxLength) {
-        finalContent = content.slice(
+      if (finalContent.length > parsed.data.maxLength) {
+        finalContent = finalContent.slice(
           parsed.data.startIndex,
           parsed.data.startIndex + parsed.data.maxLength
         );
