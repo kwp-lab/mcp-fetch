@@ -19,10 +19,21 @@ To use this tool with Claude Desktop, simply add the following to your Claude De
 
 This will automatically download and run the latest version of the tool when needed.
 
-**Note**: You'll need macOS and ImageMagick installed for image processing:
+### Required Setup
+
+1. Install ImageMagick for image processing:
 ```bash
 brew install imagemagick
 ```
+
+2. Enable Accessibility for Claude:
+   - Open System Settings
+   - Go to Privacy & Security > Accessibility
+   - Click the "+" button
+   - Add Claude from your Applications folder
+   - Turn ON the toggle for Claude
+
+This accessibility setting is required for automated clipboard operations (Cmd+V) to work properly.
 
 ## For Developers
 
