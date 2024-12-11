@@ -18,6 +18,10 @@ import robotsParser from "robots-parser";
 
 const execAsync = promisify(exec);
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface Image {
   src: string;
   alt: string;
@@ -29,13 +33,11 @@ interface ExtractedContent {
   images: Image[];
 }
 
-// Constants
 const DEFAULT_USER_AGENT_AUTONOMOUS =
   "ModelContextProtocol/1.0 (Autonomous; +https://github.com/modelcontextprotocol/servers)";
 const DEFAULT_USER_AGENT_MANUAL =
   "ModelContextProtocol/1.0 (User-Specified; +https://github.com/modelcontextprotocol/servers)";
 
-// Schema definitions
 const FetchArgsSchema = z.object({
   url: z.string().url(),
   maxLength: z.number().positive().max(1000000).default(20000),
@@ -55,7 +57,6 @@ const CallToolSchema = z.object({
   }),
 });
 
-// Utility functions
 function extractContentFromHtml(
   html: string,
   url: string
@@ -68,52 +69,47 @@ function extractContentFromHtml(
     return "<e>Page failed to be simplified from HTML</e>";
   }
 
+  // Extract images from the article content only
+  const articleDom = new JSDOM(article.content);
+  const imgElements = Array.from(
+    articleDom.window.document.querySelectorAll("img")
+  );
+
+  const images: Image[] = imgElements.map((img) => {
+    const src = img.src;
+    const alt = img.alt || "";
+    return { src, alt };
+  });
+
   const turndownService = new TurndownService({
     headingStyle: "atx",
     codeBlockStyle: "fenced",
   });
-
-  // Extract and process images before markdown conversion
-  const images: Image[] = [];
-  const imgElements = Array.from(dom.window.document.querySelectorAll("img"));
-  for (const img of imgElements) {
-    const src = img.src;
-    const alt = img.alt || "";
-    if (src) {
-      images.push({ src, alt });
-    }
-  }
-
   const markdown = turndownService.turndown(article.content);
+
   return { markdown, images };
 }
 
 async function fetchImages(
   images: Image[]
 ): Promise<(Image & { data: Buffer })[]> {
-  const fetchedImages = await Promise.all(
-    images.map(async (img) => {
-      try {
-        const response = await fetch(img.src);
-        if (response.ok) {
-          const buffer = await response.arrayBuffer();
-          return {
-            ...img,
-            data: Buffer.from(buffer),
-          };
-        }
-      } catch (error) {
-        console.error(`Failed to fetch image ${img.src}:`, error);
-      }
-      return null;
-    })
-  );
-  return fetchedImages.filter(
-    (img): img is Image & { data: Buffer } => img !== null
-  );
+  const fetchedImages = [];
+  for (const img of images) {
+    const response = await fetch(img.src);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch image ${img.src}: status ${response.status}`
+      );
+    }
+    const buffer = await response.arrayBuffer();
+    fetchedImages.push({
+      ...img,
+      data: Buffer.from(buffer),
+    });
+  }
+  return fetchedImages;
 }
 
-// Check if a command exists in PATH
 async function commandExists(cmd: string): Promise<boolean> {
   try {
     await execAsync(`which ${cmd}`);
@@ -125,37 +121,60 @@ async function commandExists(cmd: string): Promise<boolean> {
 
 async function addImagesToClipboard(
   images: (Image & { data: Buffer })[]
-): Promise<unknown> {
+): Promise<void> {
   if (images.length === 0) return;
 
-  // 一時ファイルのパスを生成
+  const hasPbcopy = await commandExists("pbcopy");
+  const hasOsascript = await commandExists("osascript");
+  if (!hasPbcopy) {
+    throw new Error(
+      "'pbcopy' command not found. This tool works on macOS only by default."
+    );
+  }
+  if (!hasOsascript) {
+    throw new Error(
+      "'osascript' command not found. Required to set clipboard with images."
+    );
+  }
+
   const tempDir = "/tmp/mcp-fetch-images";
-  const decodeCommands = images
-    .map(
-      (img, index) =>
-        `echo '${img.data.toString("base64")}' | base64 --decode > ${tempDir}/${index}.png`
-    )
-    .join(" && ");
+  await execAsync(`mkdir -p ${tempDir} && rm -f ${tempDir}/*.png`);
 
-  const script = `
-    mkdir -p ${tempDir}
-    rm -f ${tempDir}/*.png
-    ${decodeCommands}
-    magick convert -append ${tempDir}/*.png ${tempDir}/combined.png
-    osascript -e 'set the clipboard to (read (POSIX file "${tempDir}/combined.png") as «class PNGf»)'
-    rm -rf ${tempDir}
-  `;
-
-  return new Promise((resolve, reject) => {
-    exec(script, (err: Error | null, stdout: string, stderr: string) => {
-      if (err) {
-        console.error("Shell error:", err);
-        reject(err);
-      } else {
-        resolve(stdout);
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const imgPath = `${tempDir}/img_${i}.png`;
+    await execAsync(
+      `echo '${img.data.toString("base64")}' | base64 --decode > ${imgPath}`
+    );
+    const script = `osascript -e 'set the clipboard to (read (POSIX file "${imgPath}") as «class PNGf»)'`;
+    const { stderr } = await execAsync(script);
+    if (stderr?.trim()) {
+      const lines = stderr.trim().split("\n");
+      const nonWarningLines = lines.filter(
+        (line) => !line.includes("WARNING:")
+      );
+      if (nonWarningLines.length > 0) {
+        throw new Error("Failed to copy image to clipboard.");
       }
-    });
-  });
+    }
+
+    // 各画像コピー後に⌘Vを実行
+    await sleep(500);
+    const pasteScript = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`;
+    const { stderr: pasteStderr } = await execAsync(pasteScript);
+    if (pasteStderr?.trim()) {
+      const lines = pasteStderr.trim().split("\n");
+      const nonWarningLines = lines.filter(
+        (line) => !line.includes("WARNING:")
+      );
+      if (nonWarningLines.length > 0) {
+        console.warn("Failed to paste image.");
+      }
+    }
+    await sleep(500);
+  }
+
+  await execAsync(`rm -rf ${tempDir}`);
 }
 
 async function checkRobotsTxt(
@@ -165,38 +184,32 @@ async function checkRobotsTxt(
   const { protocol, host } = new URL(url);
   const robotsUrl = `${protocol}//${host}/robots.txt`;
 
-  try {
-    const response = await fetch(robotsUrl);
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        throw new Error(
-          "Autonomous fetching not allowed based on robots.txt response"
-        );
-      }
-      return true; // Allow if robots.txt is not available
-    }
-
-    const robotsTxt = await response.text();
-    const robots = robotsParser(robotsUrl, robotsTxt);
-
-    if (!robots.isAllowed(url, userAgent)) {
+  const response = await fetch(robotsUrl);
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
       throw new Error(
-        "The site's robots.txt specifies that autonomous fetching is not allowed. " +
-          "Try manually fetching the page using the fetch prompt."
+        "Autonomous fetching not allowed based on robots.txt response"
       );
     }
-    return true;
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to check robots.txt: ${error.message}`);
-    }
-    throw error;
+    return true; // Allow if no robots.txt
   }
+
+  const robotsTxt = await response.text();
+  const robots = robotsParser(robotsUrl, robotsTxt);
+
+  if (!robots.isAllowed(url, userAgent)) {
+    throw new Error(
+      "The site's robots.txt specifies that autonomous fetching is not allowed. " +
+        "Try manually fetching the page using the fetch prompt."
+    );
+  }
+  return true;
 }
 
 interface FetchResult {
   content: string;
   prefix: string;
+  imageUrls?: string[];
 }
 
 async function fetchUrl(
@@ -204,64 +217,59 @@ async function fetchUrl(
   userAgent: string,
   forceRaw = false
 ): Promise<FetchResult> {
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": userAgent },
-    });
+  const response = await fetch(url, {
+    headers: { "User-Agent": userAgent },
+  });
 
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch ${url} - status code ${response.status}`
-      );
-    }
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url} - status code ${response.status}`);
+  }
 
-    const contentType = response.headers.get("content-type") || "";
-    const text = await response.text();
-    const isHtml =
-      text.toLowerCase().includes("<html") || contentType.includes("text/html");
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  const isHtml =
+    text.toLowerCase().includes("<html") || contentType.includes("text/html");
 
-    if (isHtml && !forceRaw) {
-      const result = extractContentFromHtml(text, url);
-      if (typeof result === "string") {
-        return {
-          content: result,
-          prefix: "",
-        };
-      }
-
-      const { markdown, images } = result;
-      const fetchedImages = await fetchImages(images);
-      if (fetchedImages.length > 0) {
-        try {
-          await addImagesToClipboard(fetchedImages);
-          return {
-            content: markdown,
-            prefix: `Found and processed ${fetchedImages.length} images. They have been added to your clipboard.\n`,
-          };
-        } catch (err) {
-          console.error("Failed to add images to clipboard:", err);
-          return {
-            content: markdown,
-            prefix: `Found ${fetchedImages.length} images but failed to copy them to the clipboard.\n`,
-          };
-        }
-      }
+  if (isHtml && !forceRaw) {
+    const result = extractContentFromHtml(text, url);
+    if (typeof result === "string") {
       return {
-        content: markdown,
+        content: result,
         prefix: "",
       };
     }
 
-    return {
-      content: text,
-      prefix: `Content type ${contentType} cannot be simplified to markdown, but here is the raw content:\n`,
-    };
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to fetch ${url}: ${error.message}`);
+    const { markdown, images } = result;
+    const fetchedImages = await fetchImages(images);
+    const imageUrls = fetchedImages.map((img) => img.src);
+
+    if (fetchedImages.length > 0) {
+      try {
+        await addImagesToClipboard(fetchedImages);
+        return {
+          content: markdown,
+          prefix: `Found and processed ${fetchedImages.length} images. Each has been copied to your clipboard with a short delay. If images were found, please paste them (Cmd+V) now and combine them with the retrieved content.\n`,
+          imageUrls,
+        };
+      } catch (err) {
+        return {
+          content: markdown,
+          prefix: `Found ${fetchedImages.length} images but failed to copy them to the clipboard.\nError: ${err instanceof Error ? err.message : String(err)}\n`,
+          imageUrls,
+        };
+      }
     }
-    throw error;
+    return {
+      content: markdown,
+      prefix: "",
+      imageUrls,
+    };
   }
+
+  return {
+    content: text,
+    prefix: `Content type ${contentType} cannot be simplified to markdown, but here is the raw content:\n`,
+  };
 }
 
 // Server setup
@@ -277,7 +285,6 @@ const server = new Server(
   }
 );
 
-// Tool handlers
 interface RequestHandlerExtra {
   signal: AbortSignal;
 }
@@ -289,7 +296,7 @@ server.setRequestHandler(
       {
         name: "fetch",
         description:
-          "Fetches a URL from the internet and optionally extracts its contents as markdown.",
+          "Retrieves URLs from the Internet and extracts their content as markdown. If an image is found, it is written to the clipboard of the user's host machine, so once you stop the response and ask the user to “paste the image in the article.",
         inputSchema: zodToJsonSchema(FetchArgsSchema),
       },
     ];
@@ -320,7 +327,7 @@ server.setRequestHandler(
 
       await checkRobotsTxt(parsed.data.url, DEFAULT_USER_AGENT_AUTONOMOUS);
 
-      const { content, prefix } = await fetchUrl(
+      const { content, prefix, imageUrls } = await fetchUrl(
         parsed.data.url,
         DEFAULT_USER_AGENT_AUTONOMOUS,
         parsed.data.raw
@@ -337,11 +344,18 @@ server.setRequestHandler(
         } to get more content.</e>`;
       }
 
+      let imagesSection = "";
+      if (imageUrls && imageUrls.length > 0) {
+        imagesSection =
+          "\n\nImages found in article:\n" +
+          imageUrls.map((url) => `- ${url}`).join("\n");
+      }
+
       return {
         content: [
           {
             type: "text",
-            text: `${prefix}Contents of ${parsed.data.url}:\n${finalContent}`,
+            text: `${prefix}Contents of ${parsed.data.url}:\n${finalContent}${imagesSection}`,
           },
         ],
       };
@@ -363,10 +377,9 @@ server.setRequestHandler(
 async function runServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("MCP Fetch Server running on stdio");
 }
 
 runServer().catch((error) => {
-  console.error("Fatal error running server:", error);
+  process.stderr.write(`Fatal error running server: ${error}\n`);
   process.exit(1);
 });
