@@ -10,7 +10,6 @@ import { Readability } from "@mozilla/readability"
 import TurndownService from "turndown"
 import { exec } from "node:child_process"
 import { promisify } from "node:util"
-import sharp from "sharp"
 
 const execAsync = promisify(exec)
 
@@ -21,7 +20,6 @@ function sleep(ms: number) {
 interface Image {
 	src: string
 	alt: string
-	data?: Buffer
 }
 
 interface ExtractedContent {
@@ -86,48 +84,6 @@ function extractContentFromHtml(
 	return { markdown, images }
 }
 
-async function fetchImages(
-	images: Image[],
-): Promise<(Image & { data: Buffer })[]> {
-	const fetchedImages = []
-	for (const img of images) {
-		const response = await fetch(img.src)
-		if (!response.ok) {
-			throw new Error(
-				`Failed to fetch image ${img.src}: status ${response.status}`,
-			)
-		}
-		const buffer = await response.arrayBuffer()
-		const imageBuffer = Buffer.from(buffer)
-
-		// Check if the image is a GIF and extract first frame if animated
-		if (img.src.toLowerCase().endsWith(".gif")) {
-			try {
-				const metadata = await sharp(imageBuffer).metadata()
-				if (metadata.pages && metadata.pages > 1) {
-					// Extract first frame of animated GIF
-					const firstFrame = await sharp(imageBuffer, { page: 0 })
-						.png()
-						.toBuffer()
-					fetchedImages.push({
-						...img,
-						data: firstFrame,
-					})
-					continue
-				}
-			} catch (error) {
-				console.warn(`Warning: Failed to process GIF image ${img.src}:`, error)
-			}
-		}
-
-		fetchedImages.push({
-			...img,
-			data: imageBuffer,
-		})
-	}
-	return fetchedImages
-}
-
 async function commandExists(cmd: string): Promise<boolean> {
 	try {
 		await execAsync(`which ${cmd}`)
@@ -135,146 +91,6 @@ async function commandExists(cmd: string): Promise<boolean> {
 	} catch {
 		return false
 	}
-}
-
-async function getImageDimensions(
-	buffer: Buffer,
-): Promise<{ width: number; height: number; size: number }> {
-	const metadata = await sharp(buffer).metadata()
-	return {
-		width: metadata.width || 0,
-		height: metadata.height || 0,
-		size: buffer.length,
-	}
-}
-
-async function addImagesToClipboard(
-	images: (Image & { data: Buffer })[],
-): Promise<void> {
-	if (images.length === 0) return
-
-	const hasPbcopy = await commandExists("pbcopy")
-	const hasOsascript = await commandExists("osascript")
-	if (!hasPbcopy) {
-		throw new Error(
-			"'pbcopy' command not found. This tool works on macOS only by default.",
-		)
-	}
-	if (!hasOsascript) {
-		throw new Error(
-			"'osascript' command not found. Required to set clipboard with images.",
-		)
-	}
-
-	const MAX_HEIGHT = 8000
-	const MAX_SIZE_BYTES = 30 * 1024 * 1024 // 30MB
-	const MAX_IMAGES_PER_GROUP = 6 // 1グループあたりの最大画像数
-
-	const tempDir = "/tmp/mcp-fetch-images"
-	await execAsync(`mkdir -p ${tempDir} && rm -f ${tempDir}/*.png`)
-
-	// 画像をグループ化して処理
-	let currentGroup: Buffer[] = []
-	let currentHeight = 0
-	let currentSize = 0
-
-	const processGroup = async (group: Buffer[]) => {
-		if (group.length === 0) return
-
-		// 垂直方向に画像を結合
-		const mergedImagePath = `${tempDir}/merged_${Date.now()}.png`
-		await sharp({
-			create: {
-				width: Math.max(
-					...(await Promise.all(
-						group.map(async (buffer) => {
-							const metadata = await sharp(buffer).metadata()
-							return metadata.width || 0
-						}),
-					)),
-				),
-				height: (
-					await Promise.all(
-						group.map(async (buffer) => {
-							const metadata = await sharp(buffer).metadata()
-							return metadata.height || 0
-						}),
-					)
-				).reduce((a, b) => a + b, 0),
-				channels: 4,
-				background: { r: 255, g: 255, b: 255, alpha: 1 },
-			},
-		})
-			.composite(
-				await Promise.all(
-					group.map(async (buffer, index) => {
-						const previousHeights = await Promise.all(
-							group.slice(0, index).map(async (b) => {
-								const metadata = await sharp(b).metadata()
-								return metadata.height || 0
-							}),
-						)
-						const top = previousHeights.reduce((a, b) => a + b, 0)
-						return {
-							input: buffer,
-							top,
-							left: 0,
-						}
-					}),
-				),
-			)
-			.png()
-			.toFile(mergedImagePath)
-
-		const { stderr } = await execAsync(
-			`osascript -e 'set the clipboard to (read (POSIX file "${mergedImagePath}") as «class PNGf»)'`,
-		)
-		if (stderr?.trim()) {
-			const lines = stderr.trim().split("\n")
-			const nonWarningLines = lines.filter((line) => !line.includes("WARNING:"))
-			if (nonWarningLines.length > 0) {
-				throw new Error("Failed to copy merged image to clipboard.")
-			}
-		}
-
-		await sleep(500)
-		const pasteScript = `osascript -e 'tell application "System Events" to keystroke "v" using command down'`
-		const { stderr: pasteStderr } = await execAsync(pasteScript)
-		if (pasteStderr?.trim()) {
-			const lines = pasteStderr.trim().split("\n")
-			const nonWarningLines = lines.filter((line) => !line.includes("WARNING:"))
-			if (nonWarningLines.length > 0) {
-				console.warn("Failed to paste merged image.")
-			}
-		}
-		await sleep(500)
-	}
-
-	for (const img of images) {
-		const { height, size } = await getImageDimensions(img.data)
-
-		if (
-			currentGroup.length >= MAX_IMAGES_PER_GROUP ||
-			currentHeight + height > MAX_HEIGHT ||
-			currentSize + size > MAX_SIZE_BYTES
-		) {
-			// 現在のグループを処理
-			await processGroup(currentGroup)
-			// 新しいグループを開始
-			currentGroup = [img.data]
-			currentHeight = height
-			currentSize = size
-		} else {
-			currentGroup.push(img.data)
-			currentHeight += height
-			currentSize += size
-		}
-	}
-
-	// 残りのグループを処理
-	await processGroup(currentGroup)
-
-	await execAsync(`rm -rf ${tempDir}`)
 }
 
 interface FetchResult {
@@ -311,25 +127,8 @@ async function fetchUrl(
 		}
 
 		const { markdown, images } = result
-		const fetchedImages = await fetchImages(images)
-		const imageUrls = fetchedImages.map((img) => img.src)
+		const imageUrls = images.map((img) => img.src)
 
-		if (fetchedImages.length > 0) {
-			try {
-				await addImagesToClipboard(fetchedImages)
-				return {
-					content: markdown,
-					prefix: `Found and processed ${fetchedImages.length} images. Images have been merged vertically (max 6 images per group) and copied to your clipboard. Please paste (Cmd+V) to combine with the retrieved content.\n`,
-					imageUrls,
-				}
-			} catch (err) {
-				return {
-					content: markdown,
-					prefix: `Found ${fetchedImages.length} images but failed to copy them to the clipboard.\nError: ${err instanceof Error ? err.message : String(err)}\n`,
-					imageUrls,
-				}
-			}
-		}
 		return {
 			content: markdown,
 			prefix: "",
@@ -367,7 +166,7 @@ server.setRequestHandler(
 			{
 				name: "fetch",
 				description:
-					"Retrieves URLs from the Internet and extracts their content as markdown. If images are found, they are merged vertically (max 6 images per group, max height 8000px, max size 30MB per group) and copied to the clipboard of the user's host machine. You will need to paste (Cmd+V) to insert the images.",
+					"Retrieves URLs from the Internet and extracts their content as markdown. If images are found, their URLs will be included in the response.",
 				inputSchema: zodToJsonSchema(FetchArgsSchema),
 			},
 		]
