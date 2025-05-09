@@ -47,6 +47,6 @@ jobs:
           git push --tags
 
       - name: Publish to npm
-        run: npm publish --access public -ws --include-workspace-root
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,8 +1,34 @@
 # MCP Fetch
 
-[![smithery badge](https://smithery.ai/badge/@kazuph/mcp-fetch)](https://smithery.ai/server/@kazuph/mcp-fetch)
-
 Model Context Protocol server for fetching web content and processing images. This allows Claude Desktop (or any MCP client) to fetch web content and handle images appropriately.
+
+This repository forks from the [@smithery/mcp-fetch](https://github.com/smithery-ai/mcp-fetch) and replaces the `node-fetch` implementation with the library [node-fetch-native](https://www.npmjs.com/package/node-fetch-native).
+
+The server will use the `http_proxy` and `https_proxy` environment variables to route requests through the proxy server by default if they are set.
+You also can set the `MCP_HTTP_PROXY` environment variable to use a different proxy server.
+
+## Available Tools
+
+- `fetch`: Retrieves URLs from the Internet and extracts their content as markdown.
+
+**Image Processing Specifications:**
+Only extract image urls from the article content, and append them to the tool result:
+
+```json
+{
+  "params": {
+    "url": "https://www.bbc.com/zhongwen/articles/ckgxvkezmvvo/simp"
+  },
+  "response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Contents of https://www.example.com/articles/123:\nHere is the article content\n\nImages found in article:\n- https://www.example.com/1.jpg.webp\n- https://www.example.com/2.jpg.webp\n- https://www.example.com/3.webp"
+      }
+    ]
+  }
+}
+```
 
 ## Quick Start (For Users)
 
@@ -13,7 +39,11 @@ To use this tool with Claude Desktop, simply add the following to your Claude De
   "tools": {
     "fetch": {
       "command": "npx",
-      "args": ["-y", "@kazuph/mcp-fetch"]
+      "args": ["-y", "@kwp-lab/mcp-fetch"],
+      "env": {
+        "BRAVE_API_KEY": "YOUR_API_KEY_HERE",
+        "MCP_HTTP_PROXY": "https://example.com:10890" // Optional, remove if not needed
+      }
     }
   }
 }
@@ -47,45 +77,39 @@ The following sections are for those who want to develop or modify the tool.
 
 ### Installing via Smithery
 
-To install MCP Fetch for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@kazuph/mcp-fetch):
+To install MCP Fetch for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@kwp-lab/mcp-fetch):
 
 ```bash
-npx -y @smithery/cli install @kazuph/mcp-fetch --client claude
+npx -y @smithery/cli install @kwp-lab/mcp-fetch --client claude
 ```
 
 ### Manual Installation
+
 ```bash
-git clone https://github.com/kazuph/mcp-fetch.git
+git clone https://github.com/kwp-lab/mcp-fetch.git
 cd mcp-fetch
 npm install
 npm run build
 ```
-
-## Image Processing Specifications
-
-When processing images from web content, the following limits are applied:
-
-- Maximum 6 images per group
-- Maximum height of 8000 pixels per group
-- Maximum size of 30MB per group
-
-If content exceeds these limits, images will be automatically split into multiple groups, and you'll need to paste (Cmd+V) multiple times.
 
 ## Configuration
 
 1. Make sure Claude Desktop is installed and running.
 
 2. Install tsx globally if you haven't:
-```bash
-npm install -g tsx
-# or
-pnpm add -g tsx
-```
+
+    ```bash
+    npm install -g tsx
+    # or
+    pnpm add -g tsx
+    ```
 
 3. Modify your Claude Desktop config located at:
+
 `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 You can easily find this through the Claude Desktop menu:
+
 1. Open Claude Desktop
 2. Click Claude on the Mac menu bar
 3. Click "Settings"
@@ -102,14 +126,3 @@ Add the following to your MCP client's configuration:
   }
 }
 ```
-
-## Available Tools
-
-- `fetch`: Retrieves URLs from the Internet and extracts their content as markdown. Images are automatically processed and prepared for clipboard operations.
-
-## Notes
-
-- This tool is designed for macOS only due to its dependency on macOS-specific clipboard operations.
-- Images are processed using Sharp for optimal performance and quality.
-- When multiple images are found, they are merged vertically with consideration for size limits.
-- Animated GIFs are automatically handled by extracting their first frame.

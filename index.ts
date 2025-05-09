@@ -4,12 +4,18 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import { zodToJsonSchema } from "zod-to-json-schema"
-import fetch from "node-fetch"
 import { JSDOM } from "jsdom"
 import { Readability } from "@mozilla/readability"
 import TurndownService from "turndown"
 import { exec } from "node:child_process"
 import { promisify } from "node:util"
+import { createFetch } from 'node-fetch-native/proxy';
+
+const customProxy = process.env.MCP_HTTP_PROXY;
+const proxyOptions = customProxy ? { url:customProxy }: undefined;
+
+// Default is read from https_proxy, http_proxy, HTTPS_PROXY or HTTP_PROXY environment variables
+const fetch = createFetch(proxyOptions);
 
 const execAsync = promisify(exec)
 

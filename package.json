@@ -1,6 +1,6 @@
 {
-	"name": "@smithery/mcp-fetch",
-	"version": "0.8.12",
+	"name": "@kwp-lab/mcp-fetch",
+	"version": "0.9.0",
 	"type": "module",
 	"description": "A Model Context Protocol server that provides web content fetching capabilities",
 	"main": "dist/index.js",
@@ -22,7 +22,7 @@
 		"@modelcontextprotocol/sdk": "^1.0.0",
 		"@mozilla/readability": "^0.5.0",
 		"jsdom": "^24.0.0",
-		"node-fetch": "^3.3.2",
+		"node-fetch-native": "^1.6.6",
 		"robots-parser": "^3.0.1",
 		"turndown": "^7.1.2",
 		"zod": "^3.22.4",
@@ -40,20 +40,17 @@
 		"README.md"
 	],
 	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/kazuph/mcp-fetch.git"
-	},
+    "type": "git",
+    "url": "https://github.com/kwp-lab/mcp-fetch.git"
+  },
 	"keywords": [
 		"mcp",
 		"fetch",
 		"web",
 		"content"
 	],
-	"bugs": {
-		"url": "https://github.com/kazuph/mcp-fetch/issues"
-	},
-	"homepage": "https://github.com/kazuph/mcp-fetch#readme",
-	"author": "kazuph",
+	"homepage": "https://github.com/kwp-lab/mcp-fetch",
+	"bugs": "https://github.com/kwp-lab/mcp-fetch/issues",
 	"license": "MIT",
 	"publishConfig": {
 		"access": "public"
