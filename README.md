@@ -12,12 +12,13 @@ You also can set the `MCP_HTTP_PROXY` environment variable to use a different pr
 - `fetch`: Retrieves URLs from the Internet and extracts their content as markdown.
 
 **Image Processing Specifications:**
+
 Only extract image urls from the article content, and append them to the tool result:
 
 ```json
 {
   "params": {
-    "url": "https://www.bbc.com/zhongwen/articles/ckgxvkezmvvo/simp"
+    "url": "https://www.example.com/articles/123"
   },
   "response": {
     "content": [
