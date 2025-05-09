@@ -9,7 +9,7 @@ You also can set the `MCP_HTTP_PROXY` environment variable to use a different pr
 
 ## Available Tools
 
-- `fetch`: Retrieves URLs from the Internet and extracts their content as markdown.
+- `fetch`: Retrieves URLs from the Internet and extracts their content as markdown. If images are found, their URLs will be included in the response.
 
 **Image Processing Specifications:**
 
