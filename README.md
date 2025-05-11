@@ -2,6 +2,10 @@
 
 Model Context Protocol server for fetching web content and processing images. This allows Claude Desktop (or any MCP client) to fetch web content and handle images appropriately.
 
+<a href="https://glama.ai/mcp/servers/@kwp-lab/mcp-fetch">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kwp-lab/mcp-fetch/badge" alt="mcp-fetch MCP server" />
+</a>
+
 ## Quick Start (For Users)
 
 To use this tool with Claude Desktop, simply add the following to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json`):
