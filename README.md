@@ -1,6 +1,10 @@
 # MCP Fetch
 
-Model Context Protocol server for fetching web content and processing images. This allows Claude Desktop (or any MCP client) to fetch web content and handle images appropriately.
+Model Context Protocol server for fetching web content with custom http proxy. This allows Claude Desktop (or any MCP client) to fetch web content and handle images appropriately.
+
+<a href="https://glama.ai/mcp/servers/@kwp-lab/mcp-fetch">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@kwp-lab/mcp-fetch/badge" />
+</a>
 
 This repository forks from the [@smithery/mcp-fetch](https://github.com/smithery-ai/mcp-fetch) and replaces the `node-fetch` implementation with the library [node-fetch-native](https://www.npmjs.com/package/node-fetch-native).
 
@@ -42,7 +46,6 @@ To use this tool with Claude Desktop, simply add the following to your Claude De
       "command": "npx",
       "args": ["-y", "@kwp-lab/mcp-fetch"],
       "env": {
-        "BRAVE_API_KEY": "YOUR_API_KEY_HERE",
         "MCP_HTTP_PROXY": "https://example.com:10890" // Optional, remove if not needed
       }
     }
@@ -61,8 +64,6 @@ This will automatically download and run the latest version of the tool when nee
    - Add Claude from your Applications folder
    - Turn ON the toggle for Claude
 
-This accessibility setting is required for automated clipboard operations (Cmd+V) to work properly.
-
 ## For Developers
 
 The following sections are for those who want to develop or modify the tool.
@@ -70,7 +71,6 @@ The following sections are for those who want to develop or modify the tool.
 ## Prerequisites
 
 - Node.js 18+
-- macOS (for clipboard operations)
 - Claude Desktop (install from https://claude.ai/desktop)
 - tsx (install via `npm install -g tsx`)
 
